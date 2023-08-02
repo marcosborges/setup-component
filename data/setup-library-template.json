@@ -1,0 +1,22 @@
+{
+    "description": "$((vg_description))",
+    "name": "$((vg_name))",
+    "providerData": null,
+    "type": "Vsts",
+    "variables": {
+        "auto_created" : {
+          "isSecret":false,
+          "value":"true"
+        }
+    },
+    "variableGroupProjectReferences": [
+      {
+        "description": "$((vg_description))",
+        "name": "$((vg_name))",
+        "projectReference": {
+          "id": "$((project_id))",
+          "name": ""
+        }
+      }
+    ]
+  }

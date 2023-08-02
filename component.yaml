@@ -1,0 +1,428 @@
+parameters:
+  
+  - name: project
+    displayName: project
+    type: string
+
+  - name: repo
+    displayName: repo
+    type: string
+
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Setup
+    variables:
+      - group: "thor"
+      - name: azuredevops_base_url
+        value: https://dev.azure.com/[ORG]
+      - name: conteiner_registry_sc_id
+        value: 'b3e833bf-880b-4f8a-9fbc-06d2a65fc154'
+    jobs:
+      - job: Pipelines
+        displayName: Setup Pipeline to ${{parameters.project}}/${{parameters.repo}}
+        timeoutInMinutes: 2
+        steps:
+
+          #
+          # INITIALIZE
+          #
+          - bash: |
+              
+              echo "##vso[task.setvariable variable=project]${{parameters.project}}"
+              echo "vso[task.setvariable variable=project]${{parameters.project}}"
+              
+              echo "##vso[task.setvariable variable=repo_id]${{parameters.repo}}"
+              echo "vso[task.setvariable variable=repo_id]${{parameters.repo}}"
+              
+              TOKEN="Authorization: Basic $(echo -n ":${SYSTEM_AUTH}" | base64 -w 0)"
+              echo "##vso[task.setvariable variable=TOKEN]${TOKEN}"
+
+              cp "$(Build.SourcesDirectory)/setup/data/setup-library-template.json" "$(Build.SourcesDirectory)/setup/data/setup-library-template-dev.json"
+              cp "$(Build.SourcesDirectory)/setup/data/setup-library-template.json" "$(Build.SourcesDirectory)/setup/data/setup-library-template-uat.json"
+              cp "$(Build.SourcesDirectory)/setup/data/setup-library-template.json" "$(Build.SourcesDirectory)/setup/data/setup-library-template-prd.json"
+
+            displayName: Export variables 
+            env:
+              SYSTEM_AUTH: "$(AZURE_PAT_TOKEN)"
+          
+          - bash: |
+              
+              PROJECT_NAME=$(curl -s "${URL}" --header "${AUTH}" --header "Content-Type: application/json" | jq --raw-output '.name //empty')
+              PROJECT_ID=$(curl -s "${URL}" --header "${AUTH}" --header "Content-Type: application/json" | jq --raw-output '.id //empty')
+              
+              echo PROJECT_NAME=${PROJECT_NAME}
+              echo PROJECT_ID=${PROJECT_ID}
+
+              echo "##vso[task.setvariable variable=project_id]${PROJECT_ID}"
+              echo "vso[task.setvariable variable=project_id]${PROJECT_ID}"
+              
+              echo "##vso[task.setvariable variable=project_name]${PROJECT_NAME}"
+              echo "vso[task.setvariable variable=project_name]${PROJECT_NAME}"
+
+            displayName: Project get name
+            env:
+              URL: "$(azuredevops_base_url)/_apis/projects/$(project)?api-version=6.0"
+              AUTH: "$(TOKEN)"
+
+
+          #
+          # BRANCHES
+          #
+          - bash: |
+
+              LAST_OBJECT_COMMIT_ID=$(curl -s ${MASTER_LAST_COMMIT_URL} --header "${AUTH}" --header "Content-Type: application/json" | jq --raw-output '.value[0].objectId')
+              if [[ -z "${LAST_OBJECT_COMMIT_ID}" ]]; then
+                LAST_OBJECT_COMMIT_ID=$(curl -s ${MAIN_LAST_COMMIT_URL} --header "${AUTH}" --header "Content-Type: application/json" | jq --raw-output '.value[0].objectId')
+              fi
+              
+              echo "LAST_OBJECT_COMMIT_ID: $LAST_OBJECT_COMMIT_ID"
+              
+              # Develop
+              BODY_DEVELOP="[{\"name\":\"refs/heads/develop\",\"newObjectId\":\"${LAST_OBJECT_COMMIT_ID}\",\"oldObjectId\":\"0000000000000000000000000000000000000000\"}]"
+              curl -X POST -s ${CREATE_BRANCH_URL} --header "${AUTH}" --header "Content-Type: application/json" -d "${BODY_DEVELOP}"
+
+              # Release
+              BODY_RELEASE="[{\"name\":\"refs/heads/release\",\"newObjectId\":\"${LAST_OBJECT_COMMIT_ID}\",\"oldObjectId\":\"0000000000000000000000000000000000000000\"}]"
+              curl -X POST -s ${CREATE_BRANCH_URL} --header "${AUTH}" --header "Content-Type: application/json" -d "${BODY_RELEASE}"
+
+            displayName: "Create Branches"
+            env:
+              MASTER_LAST_COMMIT_URL: "$(azuredevops_base_url)/$(project_id)/_apis/git/repositories/${{parameters.repo}}/refs?filter=heads/master&api-version=6.0"
+              MAIN_LAST_COMMIT_URL: "$(azuredevops_base_url)/$(project_id)/_apis/git/repositories/${{parameters.repo}}/refs?filter=heads/main&api-version=6.0"
+              CREATE_BRANCH_URL: "$(azuredevops_base_url)/$(project_id)/_apis/git/repositories/${{parameters.repo}}/refs?api-version=6.0"
+              AUTH: "$(TOKEN)"
+
+
+          #
+          # PIPELINE
+          #
+          - task: replacetokens@3
+            displayName: "Replace tokens"
+            inputs:
+              targetFiles: "$(Build.SourcesDirectory)/setup/data/setup-pipeline-template.json"
+              verbosity: detailed
+              actionOnMissing: 'log warning'
+              emptyValue: ''
+              tokenPrefix: '$(('
+              tokenSuffix: '))'
+          - bash: cat $(Build.SourcesDirectory)/setup/data/setup-pipeline-template.json
+          - script: |
+              echo ${{parameters.project}} - ${{parameters.repo}}
+              echo "OBTENDO ID DO REPOSITORIO"
+              REPO_ID=$(curl -s ${REPO_URL} --header "${AUTH}" --header "Content-Type: application/json" | jq --raw-output '.id')
+              echo REPO_ID:$REPO_ID
+              echo ${PIPELINE_URL}
+              echo "CRIANDO A PIPELINE"
+              echo $(curl -s -X POST ${PIPELINE_URL} --header "${AUTH}" --header 'Content-Type: application/json' --data-binary "@$(Build.SourcesDirectory)/setup/data/setup-pipeline-template.json")
+            displayName: Pipelines
+            env:
+              REPO_URL: "$(azuredevops_base_url)/$(project_id)/_apis/git/repositories/${{parameters.repo}}"
+              PIPELINE_URL: "$(azuredevops_base_url)/$(project_id)/_apis/build/definitions?api-version=5.0"
+              AUTH: "$(TOKEN)"
+          - bash: |
+                PIPELINE_ID=$(curl -s -X GET ${PIPELINE_URL} --header "${AUTH}" --header 'Content-Type: application/json' | jq --raw-output '.value[0].id //empty')
+                echo "##vso[task.setvariable variable=pipeline_id]${PIPELINE_ID}"
+                echo "vso[task.setvariable variable=pipeline_id]${PIPELINE_ID}"
+            displayName: Get Pipeline ID
+            env:
+              REPO_URL: "$(azuredevops_base_url)/$(project_id)/_apis/git/repositories/${{parameters.repo}}"
+              PIPELINE_URL: "$(azuredevops_base_url)/$(project_id)/_apis/build/definitions?name=$(repo_id)&api-version=5.0"
+              AUTH: "$(TOKEN)"
+
+          #
+          # LIBRARIES
+          #
+          - bash: |
+              echo "##vso[task.setvariable variable=vg_name]${VG_NAME}"
+              echo "vso[task.setvariable variable=vg_name]${VG_NAME}"
+
+              echo "##vso[task.setvariable variable=vg_description]${VG_DESCRIPTION}"
+              echo "vso[task.setvariable variable=vg_description]${VG_DESCRIPTION}"
+
+            displayName:  Library set vars
+            env:
+              VG_NAME: "${{parameters.repo}}"
+              VG_DESCRIPTION: "Description for VG ${{parameters.repo}}"
+          - task: replacetokens@3
+            displayName: "Library rendering"
+            inputs:
+              targetFiles: "$(Build.SourcesDirectory)/setup/data/setup-library-template.json"
+              verbosity: detailed
+              actionOnMissing: 'log warning'
+              encoding: 'auto'
+              emptyValue: ''
+              tokenPrefix: '$(('
+              tokenSuffix: '))'
+          - bash: |
+              cat "$(Build.SourcesDirectory)/setup/data/setup-library-template.json"
+              echo $(curl -s -X POST "${URL}" --header "${AUTH}" --header 'Content-Type: application/json;charset=utf-8' --data-binary "@$(Build.SourcesDirectory)/setup/data/setup-library-template.json")
+            displayName: Library creating
+            continueOnError: true
+            env:
+              URL: "$(azuredevops_base_url)/_apis/distributedtask/variablegroups?api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+          - bash: |
+              echo "##vso[task.setvariable variable=vg_name]${VG_NAME_DEV}"
+              echo "vso[task.setvariable variable=vg_name]${VG_NAME_DEV}"
+
+              echo "##vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_DEV}"
+              echo "vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_DEV}"
+
+            displayName:  Library dev set vars
+            env:
+              VG_NAME_DEV: "${{parameters.repo}}-development"
+              VG_DESCRIPTION_DEV: "Description for VG ${{parameters.repo}}"
+          - task: replacetokens@3
+            displayName: "Library dev rendering"
+            inputs:
+              targetFiles: "$(Build.SourcesDirectory)/setup/data/setup-library-template-dev.json"
+              verbosity: detailed
+              actionOnMissing: 'log warning'
+              encoding: 'auto'
+              emptyValue: ''
+              tokenPrefix: '$(('
+              tokenSuffix: '))'
+          - bash: |
+              cat "$(Build.SourcesDirectory)/setup/data/setup-library-template-dev.json"
+              echo $(curl -s -X POST "${URL}" --header "${AUTH}" --header 'Content-Type: application/json;charset=utf-8' --data-binary "@$(Build.SourcesDirectory)/setup/data/setup-library-template-dev.json")
+            displayName: Library dev creating
+            continueOnError: true
+            env:
+              URL: "$(azuredevops_base_url)/_apis/distributedtask/variablegroups?api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+          - bash: |
+              echo "##vso[task.setvariable variable=vg_name]${VG_NAME_UAT}"
+              echo "vso[task.setvariable variable=vg_name]${VG_NAME_UAT}"
+              echo "##vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_UAT}"
+              echo "vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_UAT}"
+            displayName:  Library uat set vars
+            env:
+              VG_NAME_UAT: "${{parameters.repo}}-uat"
+              VG_DESCRIPTION_UAT: "Description for VG ${{parameters.repo}}"
+          - task: replacetokens@3
+            displayName: "Library uat rendering"
+            inputs:
+              targetFiles: "$(Build.SourcesDirectory)/setup/data/setup-library-template-uat.json"
+              verbosity: detailed
+              actionOnMissing: 'log warning'
+              encoding: 'auto'
+              emptyValue: ''
+              tokenPrefix: '$(('
+              tokenSuffix: '))'
+          - bash: |
+              cat "$(Build.SourcesDirectory)/setup/data/setup-library-template-uat.json"
+              echo $(curl -s -X POST "${URL}" --header "${AUTH}" --header 'Content-Type: application/json;charset=utf-8' --data-binary "@$(Build.SourcesDirectory)/setup/data/setup-library-template-uat.json")
+            displayName: Library uat creating
+            continueOnError: true
+            env:
+              URL: "$(azuredevops_base_url)/_apis/distributedtask/variablegroups?api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+          - bash: |
+              echo "##vso[task.setvariable variable=vg_name]${VG_NAME_PRD}"
+              echo "vso[task.setvariable variable=vg_name]${VG_NAME_PRD}"
+              echo "##vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_PRD}"
+              echo "vso[task.setvariable variable=vg_description]${VG_DESCRIPTION_PRD}"
+            displayName:  Library prd set vars
+            env:
+              VG_NAME_PRD: "${{parameters.repo}}-production"
+              VG_DESCRIPTION_PRD: "Description for VG ${{parameters.repo}}"
+          - task: replacetokens@3
+            displayName: "Library prd rendering"
+            inputs:
+              targetFiles: "$(Build.SourcesDirectory)/setup/data/setup-library-template-prd.json"
+              verbosity: detailed
+              actionOnMissing: 'log warning'
+              encoding: 'auto'
+              emptyValue: ''
+              tokenPrefix: '$(('
+              tokenSuffix: '))'
+          - bash: |
+              cat "$(Build.SourcesDirectory)/setup/data/setup-library-template-prd.json"
+              echo $(curl -s -X POST "${URL}" --header "${AUTH}" --header 'Content-Type: application/json;charset=utf-8' --data-binary "@$(Build.SourcesDirectory)/setup/data/setup-library-template-prd.json")
+            displayName: Library prd creating
+            continueOnError: true
+            env:
+              URL: "$(azuredevops_base_url)/_apis/distributedtask/variablegroups?api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+          #
+          # SONARQUBE
+          #
+          - bash: |
+              RESPONSE_CODE=$(curl -u ${AUTH}: -w "%{http_code}" "${URL}/components/show?component=${NAME}" --header 'Content-Type: application/json;charset=utf-8' -s -o /dev/null)
+              echo "${URL}/components/show?component=${NAME}"
+              echo RESPONSE_CODE=${RESPONSE_CODE}
+              if [[ "${RESPONSE_CODE}" == '404' ]]; then
+                echo "Criando..."
+                curl -X POST "${URL}/projects/create" -u ${AUTH}: --header 'Content-Type: application/x-www-form-urlencoded' --data-raw "project=${NAME}&name=${NAME}"
+              fi
+            displayName: Setup Project on Sonarqube
+            env:
+              URL: $(SONARQUBE_SERVER)/api
+              AUTH: "$(SONARQUBE_TOKEN)" 
+              NAME: ${{parameters.repo}}
+
+
+          # ALLOW GLOBAL GROUP VARIABLES
+          - bash: |
+              echo curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"
+              echo  $(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  )
+              GLOBAL_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=global_variable_id]${GLOBAL_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=global_variable_id]${GLOBAL_VARIABLE_ID}"
+            displayName: "Get Global VG ID "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=global&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+          
+          # DEFAULT
+          - bash: |
+              curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"
+              DEFAULT_DEV_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=default_dev_variable_id]${DEFAULT_DEV_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=default_dev_variable_id]${DEFAULT_DEV_VARIABLE_ID}"
+            displayName: "Get Default DEV VG ID"
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=global-development&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+          - bash: |
+              DEFAULT_QAS_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=default_qas_variable_id]${DEFAULT_QAS_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=default_qas_variable_id]${DEFAULT_QAS_VARIABLE_ID}"
+            displayName: "Get Default QAS VG ID "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=global-uat&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+          - bash: |
+              DEFAULT_PRD_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=default_prd_variable_id]${DEFAULT_PRD_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=default_prd_variable_id]${DEFAULT_PRD_VARIABLE_ID}"
+            displayName: "Get Default PRD VG ID"
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=global-production&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+          # COMPONENT
+
+           # ALLOW DEFAULT
+          - bash: |
+              echo curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"
+              echo  $(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  )
+              DEFAULT_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=default_variable_id]${DEFAULT_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=default_variable_id]${DEFAULT_VARIABLE_ID}"
+            displayName: "Get Component Default VG ID "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=${{parameters.repo}}&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+              
+          - bash: |
+              COMPONENT_DEV_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=component_dev_variable_id]${COMPONENT_DEV_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=component_dev_variable_id]${COMPONENT_DEV_VARIABLE_ID}"
+            displayName: "Get Component DEV VG ID"
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=${{parameters.repo}}-development&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+          - bash: |
+              COMPONENT_QAS_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=component_qas_variable_id]${COMPONENT_QAS_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=component_qas_variable_id]${COMPONENT_QAS_VARIABLE_ID}"
+            displayName: "Get Component QAS VG ID "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=${{parameters.repo}}-uat&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+          - bash: |
+              COMPONENT_PRD_VARIABLE_ID=$(curl -s -X GET "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" | jq --raw-output '.value[0].id //empty' )
+              echo "##vso[task.setvariable variable=component_prd_variable_id]${COMPONENT_PRD_VARIABLE_ID}"
+              echo "vso[task.setvariable variable=component_prd_variable_id]${COMPONENT_PRD_VARIABLE_ID}"
+            displayName: "Get Component PRD VG ID"
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/distributedtask/variablegroups?groupName=${{parameters.repo}}-production&queryOrder=IdDescending&api-version=6.0-preview.2"
+              AUTH: "$(TOKEN)"
+
+
+          ##########################################################################################################################################
+          # ALLOW PIPELINE ACCESS VARIABLES GROUPS                                                                                                 #
+          #                                                                                                                                        #
+          ##########################################################################################################################################
+
+          # GLOBAL
+          - bash: | 
+              echo ${URL}
+              echo ${PIPELINE_ID}
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8" --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Global VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(global_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+
+          # DEFAULT
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Default DEV VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(default_dev_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Default QAS VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(default_qas_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Default PRD VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(default_prd_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          
+          # COMPONENT
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Component Default VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(default_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Component DEV VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(component_dev_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Component QAS VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(component_qas_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow Component PRD VG "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/variablegroup/$(component_prd_variable_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"         
+          
+          # CONTAINER REGISTRY SERVICE CONNECTION
+          - bash: | 
+              curl -s -X PATCH "${URL}" --header "${AUTH}" --header "Content-Type: application/json;charset=utf-8"  --data-raw "{\"pipelines\":[{\"id\":${PIPELINE_ID},\"authorized\":true}]}"
+            displayName: "Allow ECR "
+            env:
+              URL: "$(azuredevops_base_url)/$(project_id)/_apis/pipelines/pipelinePermissions/endpoint/$(conteiner_registry_sc_id)?api-version=7.1-preview.1"
+              AUTH: "$(TOKEN)" 
+              PIPELINE_ID: "$(pipeline_id)"

@@ -1,0 +1,23 @@
+{
+    "type": {
+        "id": "0609b952-1397-4640-95ec-e00a01b2c241"
+    },
+    "revision": 1,
+    "isDeleted": false,
+    "isBlocking": true,
+    "isEnabled": true,
+    "settings": {
+        "buildDefinitionId": "$((definition_id))",
+        "displayName": null,
+        "manualQueueOnly": false,
+        "queueOnSourceUpdateOnly": false,
+        "validDuration": 0,
+        "scope": [
+            {
+                "repositoryId": null,
+                "refName": "refs/heads/main",
+                "matchKind": "Exact"
+            }
+        ]
+    }
+}

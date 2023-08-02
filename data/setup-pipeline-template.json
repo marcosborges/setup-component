@@ -1,0 +1,63 @@
+{
+    "variables": "",
+    "triggers": [
+        {
+            "branchFilters": [],
+            "pathFilters": [],
+            "settingsSourceType": 2,
+            "batchChanges": true,
+            "maxConcurrentBuildsPerBranch": 1,
+            "triggerType": "continuousIntegration"
+        }
+    ],
+    "retentionRules": {
+        "branches": [
+                "+refs/heads/*"
+        ],
+        "daysToKeep": 10,
+        "minimumToKeep": 1,
+        "deleteBuildRecord": true,
+        "deleteTestResults": true,
+        "buildNumberFormat": "\\$(date:yyyyMMdd)\\$(rev:.r)",
+        "jobAuthorizationScope": 1,
+        "jobTimeoutInMinutes": 60,
+        "jobCancelTimeoutInMinutes": 5
+    },
+    "process": {
+            "yamlFilename": "devops/pipelines.yaml",
+            "type": 2
+    },
+    "repository": {
+        "properties": {
+                "labelSources": 0,
+                "labelSourcesFormat": "",
+                "reportBuildStatus": true,
+                "fetchDepth": 0,
+                "cleanOptions": 3,
+                "gitLfsSupport": false,
+                "skipSyncSource": false,
+                "checkoutNestedSubmodules": false
+        },
+        "id": "$((repo_id))",
+        "type": "TfsGit",
+        "name": "$((repo_id))",
+        "defaultBranch": "refs/heads/master",
+        "clean": true,
+        "checkoutSubmodules": true
+    },
+    "name": "$((repo_id))",
+    "path": "\\",
+    "type": 2,
+    "project": {
+        "id" : "$((project_id))"
+    },
+    "queue" : {
+        "id": 72,
+        "name": "Azure Pipelines",
+        "pool" : {
+            "id" : 9,
+            "name" : "Azure Pipelines",
+            "isHosted": true
+        }
+    }
+}

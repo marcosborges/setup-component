@@ -1,0 +1,26 @@
+{
+    "type": {
+        "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"
+    },
+    "revision": 1,
+    "isDeleted": false,
+    "isBlocking": true,
+    "isEnabled": true,
+    "settings": {
+        "authorEmailPatterns": null,
+        "scope": [
+            {
+                "repositoryId": null,
+                "refName": "refs/heads/main",
+                "matchKind": "Exact"
+            }
+        ],
+        "allowDownvotes": false,
+        "blockLastPusherVote": false,
+        "creatorVoteCounts": false,
+        "requireVoteOnLastIteration": false,
+        "resetOnSourcePush": false,
+        "resetRejectionsOnSourcePush": false,
+        "minimumApproverCount": 2
+    }
+}

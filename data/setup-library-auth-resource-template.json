@@ -1,0 +1,8 @@
+[
+    {
+      "authorized": true,
+      "id": "$((library_id))",
+      "name": "$((repo_id))",
+      "type": "variablegroup"
+    }
+]
